@@ -4,27 +4,15 @@ import path from 'path';
 
 // Initialize Google Drive API Client
 async function initializeDriveClient() {
-    try {
-        const serviceAccountKeyPath = process.env.SERVICE_ACCOUNT_KEY_PATH;
-        if (!serviceAccountKeyPath) {
-            throw new Error('SERVICE_ACCOUNT_KEY_PATH environment variable is not set.');
-        }
+    const serviceAccountKeyPath = './service-account-key.json'; // Update with your JSON key path
+    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountKeyPath, 'utf8'));
 
-        if (!fs.existsSync(serviceAccountKeyPath)) {
-            throw new Error(`Service account key file not found at: ${serviceAccountKeyPath}`);
-        }
+    const auth = new google.auth.GoogleAuth({
+        credentials: serviceAccount,
+        scopes: ['https://www.googleapis.com/auth/drive'],
+    });
 
-        const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountKeyPath, 'utf8'));
-        const auth = new google.auth.GoogleAuth({
-            credentials: serviceAccount,
-            scopes: ['https://www.googleapis.com/auth/drive'],
-        });
-
-        return google.drive({ version: 'v3', auth });
-    } catch (error) {
-        console.error('Error initializing Google Drive client:', error.message);
-        throw error;
-    }
+    return google.drive({ version: 'v3', auth });
 }
 
 // Verify that the file exists locally
@@ -35,96 +23,59 @@ function verifyFileExists(filePath) {
     console.log(`File verified locally: ${filePath}`);
 }
 
-// Create a subfolder in Google Drive if it does not exist
-async function createSubFolderIfNotExist(drive, parentFolderId, subFolderName) {
-    try {
-        const response = await drive.files.list({
-            q: `'${parentFolderId}' in parents and name='${subFolderName}' and mimeType='application/vnd.google-apps.folder'`,
-            fields: 'files(id, name)',
-        });
-
-        if (response.data.files.length > 0) {
-            console.log(
-                `Subfolder "${subFolderName}" already exists. Folder ID: ${response.data.files[0].id}`
-            );
-            return response.data.files[0].id;
-        }
-
-        const folderMetadata = {
-            name: subFolderName,
-            mimeType: 'application/vnd.google-apps.folder',
-            parents: [parentFolderId],
-        };
-
-        const folderResponse = await drive.files.create({
-            resource: folderMetadata,
-            fields: 'id, name',
-        });
-
-        console.log(`Subfolder "${subFolderName}" created. Folder ID: ${folderResponse.data.id}`);
-        return folderResponse.data.id;
-    } catch (error) {
-        console.error('Error creating subfolder:', error.message);
-        throw error;
-    }
-}
-
 // Upload the file to Google Drive
-async function uploadToGoogleDrive(filePath, parentFolderId, subFolderName, documentName) {
+async function uploadToGoogleDrive(filePath, folderId) {
     try {
         verifyFileExists(filePath);
 
         const drive = await initializeDriveClient();
-        const subFolderId = await createSubFolderIfNotExist(drive, parentFolderId, subFolderName);
-
         const fileMetadata = {
-            name: documentName,
-            parents: [subFolderId],
+            name: path.basename(filePath),
+            parents: [folderId], // Folder ID where the file will be uploaded
         };
         const media = {
             mimeType: 'application/octet-stream',
             body: fs.createReadStream(filePath),
         };
 
-        console.log(`Uploading file "${fileMetadata.name}" to folder ID: ${subFolderId}`);
         const response = await drive.files.create({
             resource: fileMetadata,
             media: media,
             fields: 'id, name',
         });
 
-        if (!response.data.id) {
-            throw new Error('File upload failed: No file ID returned.');
-        }
-
         console.log(`File uploaded successfully. File ID: ${response.data.id}`);
         return response.data.id;
     } catch (error) {
-        console.error('Error during upload:', error.message);
+        console.error('Error uploading file:', error.message);
         throw error;
     }
 }
 
-// Main function to execute the upload
-(async () => {
-    const parentFolderId = process.env.FLOWISE_FOLDER_NAME;
-    const subFolderName = process.env.FLOWISE_SUBFOLDER_NAME;
-    const documentName = process.env.CUSTOMER_DOCUMENT;
-    const localFilePath = process.env.LOCAL_FILE_PATH;
+// Verify if the file exists on Google Drive
+async function verifyFileOnGoogleDrive(fileId) {
+    try {
+        const drive = await initializeDriveClient();
+        const file = await drive.files.get({
+            fileId,
+            fields: 'id, name',
+        });
 
-    if (!parentFolderId || !subFolderName || !documentName || !localFilePath) {
-        console.error('One or more required environment variables are missing.');
-        process.exit(1);
+        console.log('File found on Google Drive:', file.data);
+    } catch (error) {
+        console.error('Error verifying file on Google Drive:', error.message);
+        throw error;
     }
+}
+
+// Example Usage
+(async () => {
+    const localFilePath = './ipsum.txt'; // Replace with your local file path
+    const googleDriveFolderId = '1R4g1cSZUZ5nC2bzo7RxRO_46so5uYJS8'; // Replace with the folder ID for IrisSolutions on Google Drive
 
     try {
-        const uploadedFileId = await uploadToGoogleDrive(
-            localFilePath,
-            parentFolderId,
-            subFolderName,
-            documentName
-        );
-        console.log(`Process completed successfully. Uploaded File ID: ${uploadedFileId}`);
+        const uploadedFileId = await uploadToGoogleDrive(localFilePath, googleDriveFolderId);
+        await verifyFileOnGoogleDrive(uploadedFileId);
     } catch (error) {
         console.error('Process failed:', error.message);
     }
