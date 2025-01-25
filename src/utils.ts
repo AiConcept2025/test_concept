@@ -1,7 +1,6 @@
 import { drive_v3, google } from 'googleapis';
 import fse from 'fs-extra';
-import { GaxiosPromise } from 'googleapis/build/src/apis/abusiveexperiencereport';
-import internal from 'stream';
+import path from 'path';
 
 /**
  * Verify that the file exists locally
@@ -57,7 +56,7 @@ async function createSubFolderIfNotExist(
         const folderResponse = await drive.files.create({
             resource: folderMetadata,
             fields: 'id, name',
-        });
+        } as any);
 
         console.log(`Subfolder "${subFolderName}" created. Folder ID: ${(folderResponse as any).data.id}`);
         return (folderResponse as any).data.id;
@@ -68,9 +67,9 @@ async function createSubFolderIfNotExist(
 }
 
 /**
- * Upload the file to Google Drive
+ * Upload the file to Google Drive sub folder
  */
-export async function uploadToGoogleDrive(
+export async function uploadToGoogleDrive1(
     drive: drive_v3.Drive,
     filePath: string,
     parentFolderId: string,
@@ -95,9 +94,9 @@ export async function uploadToGoogleDrive(
         console.log(`Uploading file "${fileMetadata.name}" to folder ID: ${subFolderId}`);
         const response = await drive.files.create({
             resource: fileMetadata,
-            media: media,
+            media,
             fields: 'id, name',
-        });
+        } as any);
 
         if (!(response as any).data.id) {
             throw new Error('File upload failed: No file ID returned.');
@@ -112,20 +111,94 @@ export async function uploadToGoogleDrive(
 }
 
 /**
+ * Upload the file to Google Drive
+ */
+export async function uploadToGoogleDrive(
+    drive: drive_v3.Drive,
+    filePath: string,
+    folderId: string): Promise<any> {
+    try {
+        if (!isFileExists(filePath)) {
+            return Promise.reject();
+        }
+        const name = path.basename(filePath);
+        const fileMetadata = {
+            name,
+            parents: [folderId], // Folder ID where the file will be uploaded
+        };
+        const media = {
+            mimeType: 'application/octet-stream',
+            body: fse.createReadStream(filePath),
+        };
+
+        const response = await drive.files.create({
+            resource: fileMetadata,
+            media,
+            fields: 'id, name',
+        } as any);
+
+        console.log(`File uploaded successfully. File ID: ${(response as any).data.id}`);
+        return (response as any).data.id;
+    } catch (error) {
+        console.error('Error uploading file:', (error as Error).message);
+        throw error;
+    }
+}
+
+/**
  * Verify if the file exists on Google Drive
  */
 export async function verifyFileOnGoogleDrive(
     drive: drive_v3.Drive,
-    fileId: string): Promise<void> {
+    fileId: string): Promise<boolean> {
     try {
         const file = await drive.files.get({
             fileId,
             fields: 'id, name',
         });
-
         console.log('File found on Google Drive:', file.data);
+        return true;
     } catch (error) {
         console.error('Error verifying file on Google Drive:', (error as Error).message);
-        throw error;
+        return false;
+    }
+}
+
+/**
+ * Retrieve page token for the current state of the account.
+ **/
+export async function fetchStartPageToken(drive: drive_v3.Drive,): Promise<string | null | undefined> {
+    try {
+        const res = await drive.changes.getStartPageToken({});
+        const token = res.data.startPageToken;
+        console.log('start token: ', token);
+        return token;
+    } catch (err) {
+        // TODO(developer) - Handle error
+        throw err;
+    }
+}
+
+/**
+ * Retrieve the list of changes for the currently authenticated user.
+ * @param {string} savedStartPageToken page token got after executing fetch_start_page_token.js file
+ **/
+export async function fetchChanges(drive: drive_v3.Drive, savedStartPageToken: string) {
+    try {
+        let pageToken = savedStartPageToken;
+        do {
+            const res = await drive.changes.list({
+                pageToken: savedStartPageToken,
+                fields: '*',
+            });
+            res.data.changes?.forEach((change) => {
+                console.log('change found for file: ', change.fileId);
+            });
+            pageToken = res.data.newStartPageToken as string;
+            return pageToken;
+        } while (pageToken);
+    } catch (err) {
+        // TODO(developer) - Handle error
+        throw err;
     }
 }
